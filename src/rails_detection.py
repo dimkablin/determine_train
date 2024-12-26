@@ -6,7 +6,7 @@ def detect_rails(
     img_bgr,
     canny1=80,
     canny2=200,
-    hough_threshold=120,
+    hough_threshold=115,
     min_line_length=100,
     max_line_gap=40,
     max_slope_degrees=20
@@ -76,7 +76,7 @@ def detect_rails(
     # Сортируем «сверху вниз»
     acceptable_lines.sort(key=avg_y)
 
-    eps_y = 20  # "радиус" объединения по Y
+    eps_y = 25  # "радиус" объединения по Y
     grouped_lines = []
 
     for i in range(len(acceptable_lines)):

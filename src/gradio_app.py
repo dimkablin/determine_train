@@ -28,7 +28,7 @@ def extract_frame(video_path, frame_number):
         
     return frame, f"Кадр {frame_number} из {total_frames}"
 
-def detect_and_process(video_path, frame_number):
+def detect_and_process(video_path, preview_image, time0, time1):
     # Создаём временные директории
     os.makedirs("temp/raw", exist_ok=True)
     os.makedirs("temp/processed", exist_ok=True)
@@ -37,13 +37,8 @@ def detect_and_process(video_path, frame_number):
     output_video_path = "temp/processed/processed_video.mp4"
     output_image_path = "temp/processed/detected_image.png"
     
-    # Извлекаем кадр из видео
-    frame, msg = extract_frame(video_path, frame_number)
-    if frame is None:
-        return None, None, msg
-    
     # Сохраняем кадр и детектируем рельсы
-    out_bgr, mask, count = detect_rails(frame)
+    out_bgr, mask, count = detect_rails(preview_image)
     if out_bgr is None:
         return None, None, "Не удалось обнаружить рельсы на кадре."
     
@@ -51,7 +46,7 @@ def detect_and_process(video_path, frame_number):
     cv2.imwrite(output_image_path, out_bgr)
     
     # Обработка видео
-    processed_video_path = process_video(video_path, mask, output_video_path)
+    processed_video_path = process_video(video_path, mask, output_video_path, time0, time1)
     if not processed_video_path:
         return output_image_path, None, "Видео не удалось обработать, но изображение готово."
     
@@ -98,8 +93,12 @@ def create_interface():
                 output_video = gr.Video(label="Обработанное видео")
         
         with gr.Row():
-            process_btn = gr.Button("Обработать", variant="primary")
-            status_text = gr.Textbox(label="Статус", interactive=False)
+            with gr.Column():
+                time0 = gr.Number(label="Обрабатывать с t0 (сек).", value=20, precision=0)
+                time1 = gr.Number(label="Обрабатывать до t1 (сек)", value=40, precision=0)
+                process_btn = gr.Button("Обработать", variant="primary")
+            with gr.Column():
+                status_text = gr.Textbox(label="Статус", interactive=False)
         
         # Привязываем функции к кнопкам
         preview_btn.click(
@@ -116,7 +115,7 @@ def create_interface():
         
         process_btn.click(
             fn=detect_and_process,
-            inputs=[input_video, frame_number],
+            inputs=[input_video, preview_image, time0, time1],
             outputs=[output_image, output_video, status_text]
         )
     
@@ -124,7 +123,7 @@ def create_interface():
 
 def main():
     interface = create_interface()
-    interface.launch(server_name="127.0.0.1", server_port=7860)
+    interface.launch(server_name="0.0.0.0", server_port=7860)
 
 if __name__ == "__main__":
     main()

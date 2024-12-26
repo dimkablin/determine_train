@@ -3,10 +3,10 @@ import numpy as np
 from tqdm import tqdm
 
 
-def process_video(video_path, path_mask, output_video, cutoff_time=10, alpha=0.05,threshold=2):
+def process_video(video_path, path_mask, output_video, time0=0, time1=None, alpha=0.05, threshold=1.5):
     """
     1) Получает на вход path_mask (одноканальный numpy-массив, где 0=фон, 1..N=пути).
-    2) Считывает видео, для каждого кадра (только первые 10с) считает оптический поток (Farneback).
+    2) Считывает видео, для каждого кадра (между time0 и time1) считает оптический поток (Farneback).
     3) Для каждого пути (индекс маски != 0) собирает векторы потока, сглаживает их по времени.
     4) Рисует стрелку и/или текст на кадре (показывая сглаженное направление и скорость потока).
     5) Записывает обработанное видео в output_video.
@@ -25,10 +25,19 @@ def process_video(video_path, path_mask, output_video, cutoff_time=10, alpha=0.0
     vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # Ограничиваемся 10 секундами
-    max_frames = int(fps * int(cutoff_time))  # столько кадров приходится на time секунд
-    max_frames_to_process = min(total_frames, max_frames)
+    # Вычисляем количество кадров для обработки
+    start_frame = int(fps * time0)  # Начальный кадр
+    end_frame = total_frames if time1 is None else int(fps * time1)  # Конечный кадр
 
+    if start_frame >= total_frames:
+        print("Время начала обработки выходит за пределы видео.")
+        cap.release()
+        return None
+    if end_frame > total_frames:
+        end_frame = total_frames  # Ограничиваем максимальным числом кадров
+
+    print(f"Обработка с {time0} до {time1 if time1 is not None else (total_frames / fps):.2f} секунд.")
+    
     # Проверим, совпадают ли размеры video (w,h) и path_mask
     mask_h, mask_w = path_mask.shape[:2]
     if (mask_w != vid_w) or (mask_h != vid_h):
@@ -39,6 +48,7 @@ def process_video(video_path, path_mask, output_video, cutoff_time=10, alpha=0.0
     out = cv2.VideoWriter(output_video, fourcc, fps, (vid_w, vid_h))
 
     # Считываем первый кадр
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
     ret, prev_frame = cap.read()
     if not ret:
         print("Видео пустое или ошибка чтения.")
@@ -53,11 +63,11 @@ def process_video(video_path, path_mask, output_video, cutoff_time=10, alpha=0.0
     flow_params = dict(
         pyr_scale=0.5,
         levels=3,
-        winsize=15,
+        winsize=40,
         iterations=3,
         poly_n=5,
         poly_sigma=1.2,
-        flags=0
+        flags=cv2.OPTFLOW_FARNEBACK_GAUSSIAN
     )
 
     # Собираем список ID путей (кроме 0 - фон)
@@ -67,8 +77,8 @@ def process_video(video_path, path_mask, output_video, cutoff_time=10, alpha=0.0
     # === Сглаживание: сохраняем предыдущие значения dx, dy для каждого пути ===
     smoothed_flow = {pid: {"dx": 0, "dy": 0} for pid in path_ids}
 
-    # === Основной цикл (только первые max_frames_to_process - 1 итераций) ===
-    for _ in tqdm(range(max_frames_to_process - 1), desc="Processing frames"):
+    # === Основной цикл (только кадры между time0 и time1) ===
+    for _ in tqdm(range(start_frame, end_frame - 1), desc="Processing frames"):
         ret, frame = cap.read()
         if not ret:
             break  # дошли до конца (меньше кадров, чем ожидалось?)
