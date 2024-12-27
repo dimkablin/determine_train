@@ -1,152 +1,237 @@
 import cv2
 import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Any
 from tqdm import tqdm
 
+@dataclass
+class VideoMetadata:
+    width: int
+    height: int
+    fps: float
+    total_frames: int
+    start_frame: int
+    end_frame: int
 
-def process_video(video_path, path_mask, output_video, time0=0, time1=None, alpha=0.05, threshold=1.5):
-    """
-    1) Получает на вход path_mask (одноканальный numpy-массив, где 0=фон, 1..N=пути).
-    2) Считывает видео, для каждого кадра (между time0 и time1) считает оптический поток (Farneback).
-    3) Для каждого пути (индекс маски != 0) собирает векторы потока, сглаживает их по времени.
-    4) Рисует стрелку и/или текст на кадре (показывая сглаженное направление и скорость потока).
-    5) Записывает обработанное видео в output_video.
-    6) Возвращает путь к результирующему файлу.
-    """
-
-    # === Шаг 0: Инициализация видео ===
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print("Не удалось открыть видео:", video_path)
-        return None
-
-    # Общее число кадров и FPS
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    # Вычисляем количество кадров для обработки
-    start_frame = int(fps * time0)  # Начальный кадр
-    end_frame = total_frames if time1 is None else int(fps * time1)  # Конечный кадр
-
-    if start_frame >= total_frames:
-        print("Время начала обработки выходит за пределы видео.")
-        cap.release()
-        return None
-    if end_frame > total_frames:
-        end_frame = total_frames  # Ограничиваем максимальным числом кадров
-
-    print(f"Обработка с {time0} до {time1 if time1 is not None else (total_frames / fps):.2f} секунд.")
+@dataclass
+class FlowVector:
+    dx: float
+    dy: float
     
-    # Проверим, совпадают ли размеры video (w,h) и path_mask
-    mask_h, mask_w = path_mask.shape[:2]
-    if (mask_w != vid_w) or (mask_h != vid_h):
-        print("Предупреждение: размеры маски и видео не совпадают! Масштабируем маску...")
-        path_mask = cv2.resize(path_mask, (vid_w, vid_h), interpolation=cv2.INTER_NEAREST)
+    @property
+    def magnitude(self) -> float:
+        return np.sqrt(self.dx**2 + self.dy**2)
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video, fourcc, fps, (vid_w, vid_h))
+class VideoReader:
+    def __init__(self, video_path: str):
+        self.video_path = video_path
+        self.cap = cv2.VideoCapture(video_path)
+        
+    def get_metadata(self, time0: float = 0, time1: Optional[float] = None) -> Optional[VideoMetadata]:
+        if not self.cap.isOpened():
+            print("Не удалось открыть видео:", self.video_path)
+            return None
+            
+        total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        start_frame = int(fps * time0)
+        end_frame = total_frames if time1 is None else int(fps * time1)
+        
+        if start_frame >= total_frames:
+            print("Время начала обработки выходит за пределы видео.")
+            return None
+            
+        if end_frame > total_frames:
+            end_frame = total_frames
+            
+        return VideoMetadata(width, height, fps, total_frames, start_frame, end_frame)
+        
+    def set_frame_position(self, frame_number: int) -> None:
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        
+    def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        return self.cap.read()
+        
+    def release(self) -> None:
+        self.cap.release()
 
-    # Считываем первый кадр
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    ret, prev_frame = cap.read()
-    if not ret:
-        print("Видео пустое или ошибка чтения.")
-        cap.release()
-        out.release()
-        return None
+class VideoWriter:
+    def __init__(self, output_path: str, fps: float, frame_size: Tuple[int, int]):
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+        self.output_path = output_path
+        
+    def write_frame(self, frame: np.ndarray) -> None:
+        self.writer.write(frame)
+        
+    def release(self) -> None:
+        self.writer.release()
 
-    # Переводим в grayscale для оптического потока
-    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+class OpticalFlowCalculator:
+    def __init__(self):
+        self.flow_params = dict(
+            pyr_scale=0.5,
+            levels=3,
+            winsize=40,
+            iterations=3,
+            poly_n=5,
+            poly_sigma=1.2,
+            flags=cv2.OPTFLOW_FARNEBACK_GAUSSIAN
+        )
+        
+    def calculate(self, prev_frame: np.ndarray, curr_frame: np.ndarray) -> np.ndarray:
+        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+        return cv2.calcOpticalFlowFarneback(prev_gray, curr_gray, None, **self.flow_params)
 
-    # Параметры оптического потока Farneback
-    flow_params = dict(
-        pyr_scale=0.5,
-        levels=3,
-        winsize=40,
-        iterations=3,
-        poly_n=5,
-        poly_sigma=1.2,
-        flags=cv2.OPTFLOW_FARNEBACK_GAUSSIAN
-    )
-
-    # Собираем список ID путей (кроме 0 - фон)
-    path_ids = sorted(set(path_mask.flatten()) - {0})
-    print("Обнаруженные пути в маске:", path_ids)
-
-    # === Сглаживание: сохраняем предыдущие значения dx, dy для каждого пути ===
-    smoothed_flow = {pid: {"dx": 0, "dy": 0} for pid in path_ids}
-
-    # === Основной цикл (только кадры между time0 и time1) ===
-    for _ in tqdm(range(start_frame, end_frame - 1), desc="Processing frames"):
-        ret, frame = cap.read()
-        if not ret:
-            break  # дошли до конца (меньше кадров, чем ожидалось?)
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, **flow_params)
-        output_frame = frame.copy()
-
-        # === Для каждого пути считаем среднее dx, dy и сглаживаем ===
+class PathFlowAnalyzer:
+    def __init__(self, path_mask: np.ndarray, alpha: float = 0.05):
+        self.path_mask = path_mask
+        self.alpha = alpha
+        self.path_ids = sorted(set(path_mask.flatten()) - {0})
+        self.smoothed_flow = {pid: FlowVector(0, 0) for pid in self.path_ids}
+        
+    def analyze_flow(self, flow: np.ndarray) -> Dict[int, FlowVector]:
         path_flows = {}
-        for pid in path_ids:
-            region_mask = (path_mask == pid)
-
+        
+        for pid in self.path_ids:
+            region_mask = (self.path_mask == pid)
+            
             dx_region = flow[..., 0][region_mask]
             dy_region = flow[..., 1][region_mask]
-
+            
             if len(dx_region) < 10:
-                # Слишком мало пикселей, пропускаем
                 continue
-
+                
             mean_dx = np.mean(dx_region)
             mean_dy = np.mean(dy_region)
+            
+            # Сглаживание
+            smoothed_dx = self.alpha * mean_dx + (1 - self.alpha) * self.smoothed_flow[pid].dx
+            smoothed_dy = self.alpha * mean_dy + (1 - self.alpha) * self.smoothed_flow[pid].dy
+            
+            flow_vector = FlowVector(smoothed_dx, smoothed_dy)
+            self.smoothed_flow[pid] = flow_vector
+            path_flows[pid] = flow_vector
+            
+        return path_flows
 
-            # Сглаживаем с предыдущими значениями
-            smoothed_dx = alpha * mean_dx + (1 - alpha) * smoothed_flow[pid]["dx"]
-            smoothed_dy = alpha * mean_dy + (1 - alpha) * smoothed_flow[pid]["dy"]
-            smoothed_flow[pid]["dx"] = smoothed_dx
-            smoothed_flow[pid]["dy"] = smoothed_dy
-
-            # Рассчитываем модуль скорости
-            mag = np.sqrt(smoothed_dx**2 + smoothed_dy**2)
-            path_flows[pid] = mag
-
-            # Находим boundingRect области, чтобы где-то рисовать
+class FrameVisualizer:
+    def __init__(self, path_mask: np.ndarray):
+        self.path_mask = path_mask
+        
+    def draw_flow_visualization(
+        self,
+        frame: np.ndarray,
+        path_flows: Dict[int, FlowVector],
+        detected_path: Optional[int] = None
+    ) -> np.ndarray:
+        output_frame = frame.copy()
+        
+        for pid, flow_vector in path_flows.items():
+            region_mask = (self.path_mask == pid)
             region_uint8 = region_mask.astype(np.uint8)
             x, y, w_rect, h_rect = cv2.boundingRect(region_uint8)
+            
+            # Центр области
             cx = x + w_rect // 2
             cy = y + h_rect // 2
-
-            # Рисуем стрелку
-            tip_x = int(cx + smoothed_dx * 10)
-            tip_y = int(cy + smoothed_dy * 10)
-            color = (0, 255, 0)  # зелёный
-            cv2.arrowedLine(output_frame, (cx, cy), (tip_x, tip_y), color, 2, tipLength=0.3)
-
-            # Текст
-            text_str = f"Path {pid}: dx={smoothed_dx:.1f}, dy={smoothed_dy:.1f}, mag={mag:.1f}"
-            cv2.putText(output_frame, text_str, (x, max(y-5, 0)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-        # === Логика определения пути ===
-        detected_path = None
-        for pid in path_ids:
-            if path_flows.get(pid, 0) > threshold:
-                detected_path = pid
-                break  # Прерываем, чтобы отдать приоритет ближнему пути
-
-        if detected_path:
-            text_str = f"Train detected on Path {detected_path}"
-            cv2.putText(output_frame, text_str, (50, 50), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5, (0, 0, 255), 2)
             
-        # Записываем кадр
-        out.write(output_frame)
+            # Рисуем стрелку
+            tip_x = int(cx + flow_vector.dx * 10)
+            tip_y = int(cy + flow_vector.dy * 10)
+            cv2.arrowedLine(output_frame, (cx, cy), (tip_x, tip_y), (0, 255, 0), 2, tipLength=0.3)
+            
+            # Подписи значений
+            text_str = f"Path {pid}: dx={flow_vector.dx:.1f}, dy={flow_vector.dy:.1f}, mag={flow_vector.magnitude:.1f}"
+            cv2.putText(output_frame, text_str, (x, max(y-5, 0)),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        if detected_path is not None:
+            text_str = f"Train detected on Path {detected_path}"
+            cv2.putText(output_frame, text_str, (50, 50),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            
+        return output_frame
 
-        # Подготовка к след. кадру
-        prev_gray = gray
+class TrainDetector:
+    def __init__(self, threshold: float = 1.5):
+        self.threshold = threshold
+        
+    def detect_train(self, path_flows: Dict[int, FlowVector]) -> Optional[int]:
+        for pid, flow_vector in path_flows.items():
+            if flow_vector.magnitude > self.threshold:
+                return pid
+        return None
 
-    cap.release()
-    out.release()
-    return output_video
+class VideoProcessor:
+    def __init__(self, path_mask: np.ndarray, alpha: float = 0.05, threshold: float = 1.5):
+        self.path_mask = path_mask
+        self.flow_calculator = OpticalFlowCalculator()
+        self.path_analyzer = PathFlowAnalyzer(path_mask, alpha)
+        self.visualizer = FrameVisualizer(path_mask)
+        self.train_detector = TrainDetector(threshold)
+        
+    def process_video(
+        self,
+        video_path: str,
+        output_path: str,
+        time0: float = 0,
+        time1: Optional[float] = None
+    ) -> Optional[str]:
+        # Инициализация видео
+        reader = VideoReader(video_path)
+        metadata = reader.get_metadata(time0, time1)
+        
+        if metadata is None:
+            reader.release()
+            return None
+            
+        # Проверка размеров маски
+        if (self.path_mask.shape[1] != metadata.width) or (self.path_mask.shape[0] != metadata.height):
+            print("Предупреждение: размеры маски и видео не совпадают! Масштабируем маску...")
+            self.path_mask = cv2.resize(
+                self.path_mask,
+                (metadata.width, metadata.height),
+                interpolation=cv2.INTER_NEAREST
+            )
+            
+        writer = VideoWriter(output_path, metadata.fps, (metadata.width, metadata.height))
+        
+        # Чтение первого кадра
+        reader.set_frame_position(metadata.start_frame)
+        ret, prev_frame = reader.read_frame()
+        
+        if not ret:
+            print("Видео пустое или ошибка чтения.")
+            reader.release()
+            writer.release()
+            return None
+            
+        # Основной цикл обработки
+        for _ in tqdm(range(metadata.start_frame, metadata.end_frame - 1), desc="Processing frames"):
+            ret, frame = reader.read_frame()
+            if not ret:
+                break
+                
+            # Расчет оптического потока
+            flow = self.flow_calculator.calculate(prev_frame, frame)
+            
+            # Анализ потока по путям
+            path_flows = self.path_analyzer.analyze_flow(flow)
+            
+            # Определение пути с поездом
+            detected_path = self.train_detector.detect_train(path_flows)
+            
+            # Визуализация
+            output_frame = self.visualizer.draw_flow_visualization(frame, path_flows, detected_path)
+            
+            writer.write_frame(output_frame)
+            prev_frame = frame
+            
+        reader.release()
+        writer.release()
+        return output_path

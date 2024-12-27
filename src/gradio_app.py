@@ -2,9 +2,11 @@ import os
 import gradio as gr
 import cv2
 import numpy as np
-from rails_detection import detect_rails
-from video_processing import process_video
-import shutil
+from rails_detection import RailDetector
+from video_processing import VideoProcessor
+
+
+rail_detector = RailDetector()
 
 def extract_frame(video_path, frame_number):
     """Извлекает кадр из видео"""
@@ -38,7 +40,7 @@ def detect_and_process(video_path, preview_image, time0, time1):
     output_image_path = "temp/processed/detected_image.png"
     
     # Сохраняем кадр и детектируем рельсы
-    out_bgr, mask, count = detect_rails(preview_image)
+    out_bgr, mask, count = rail_detector.detect_rails(preview_image)
     if out_bgr is None:
         return None, None, "Не удалось обнаружить рельсы на кадре."
     
@@ -46,7 +48,8 @@ def detect_and_process(video_path, preview_image, time0, time1):
     cv2.imwrite(output_image_path, out_bgr)
     
     # Обработка видео
-    processed_video_path = process_video(video_path, mask, output_video_path, time0, time1)
+    video_processor = VideoProcessor(mask)
+    processed_video_path = video_processor.process_video(video_path, output_video_path, time0, time1)
     if not processed_video_path:
         return output_image_path, None, "Видео не удалось обработать, но изображение готово."
     
@@ -67,7 +70,7 @@ def preview_frame(video_path, frame_number):
 
 def preview_rails(input_image):
     """Предпросмотр рельс"""
-    out_bgr, _, _ = detect_rails(input_image)
+    out_bgr, _, _ = rail_detector.detect_rails(input_image)
 
     return out_bgr
 
@@ -95,7 +98,7 @@ def create_interface():
         with gr.Row():
             with gr.Column():
                 time0 = gr.Number(label="Обрабатывать с t0 (сек).", value=20, precision=0)
-                time1 = gr.Number(label="Обрабатывать до t1 (сек)", value=40, precision=0)
+                time1 = gr.Number(label="Обрабатывать до t1 (сек)", value=50, precision=0)
                 process_btn = gr.Button("Обработать", variant="primary")
             with gr.Column():
                 status_text = gr.Textbox(label="Статус", interactive=False)

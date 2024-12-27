@@ -2,9 +2,14 @@ import os
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt
-from rails_detection import detect_rails
-from video_processing import process_video
+from rails_detection import RailDetector
+from video_processing import VideoProcessor
 import fire
+
+
+
+rail_detector = RailDetector()
+video_processor = VideoProcessor()
 
 def run(input_video, empty_rails, output_video):
     """
@@ -26,7 +31,7 @@ def run(input_video, empty_rails, output_video):
         return
     
     # Детектируем рельсы
-    final_image_bgr, mask, count = detect_rails(img_bgr)
+    final_image_bgr, mask, count = rail_detector.detect_rails(img_bgr)
     if final_image_bgr is None:
         print("Не удалось обнаружить рельсы на изображении.")
         return
@@ -37,7 +42,7 @@ def run(input_video, empty_rails, output_video):
     print(f"Итоговое изображение сохранено по пути: {output_image_path}")
     
     # Обрабатываем видео
-    processed_video_path = process_video(input_video, mask, output_video)
+    processed_video_path = video_processor.process_video(input_video, mask, output_video)
     if processed_video_path:
         print(f"Обработанное видео сохранено по пути: {processed_video_path}")
     else:
